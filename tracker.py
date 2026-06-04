@@ -5,7 +5,10 @@ import numpy as np
 import xarray as xr
 import scipy.ndimage.measurements as measure
 from scipy.interpolate import interp2d
+
+import argparse
 import itertools
+import os
 import sys
 
 def tracker(rain, vort, vref, rain_percentile, dist_threshold, size_threshold, latlim, interp50=True, return_snapshot=False):
@@ -136,36 +139,82 @@ def track2netcdf(raw_track_list, yrranges):
 
     return ds, all_yrrange
 
-def run_50km(model_output_6hrly, yr_beg=111, yr_end=150):
-    ## tracker parameters
-    rain_percentile = 99.5
+def get_filename_year(filename: str) -> int:
+
+    # Assume string is of format {yyyy0101.atmos_4xdaily.nc}.
+    print(filename)
+    filename_year = filename.replace('0101.atmos_4xdaily.nc', '')
+
+    return int(filename_year)
+
+def run_50km(model_output_6hrly: str,
+             yr_beg: int,
+             yr_end: int,
+             yr_chunk: int=1,
+             storage_dirname: str|None=None,
+             print_diagnostic: bool=False):
+
+    '''
+    Main function for seed tracking. The output is a netCDF file compatible with xarray.
+
+    `model_output_6hrly` is a path to the directory containing postprocessed data.
+    `yr_beg` and `yr_end` are the beginning and ending years for the tracker.
+    `yr_chunk` denotes the length of time data are processed in.
+
+    '''
+
+    # Tracker parameters
+    rain_percentile = 99.5 # precipitation percentile
     dist_threshold = 2.9 # degrees
     size_threshold = 3.1 # grid cells
-    latlim = 30
+    latlim = 30 # latitude threshold (seeds evaluated poleward of this value)
     interp50 = False
 
-    yrranges = [range(yr, yr+5) for yr in range(yr_beg, yr_end, 5)] # process each 5-year chuck at a time
-    print(yrranges)
+    # Chunk years into bins of size `yr_chunk`
+    yrranges = [range(yr, yr + yr_chunk) for yr in range(yr_beg, yr_end, yr_chunk)]
+    if print_diagnostic: print(f'Processing data over the following chunks: {yrranges}')
 
+    # Initialize a container dictionary for tracked seeds
     raw_tracks = {}
 
+    
     for yrrange in yrranges:
-        print(yrrange)
+        if print_diagnostic: print(f'Processing data over years {yrrange}...')
 
-        rain_in = xr.concat([xr.open_dataset(model_output_6hrly+'%04d0101.atmos_4xdaily.nc'%yr, chunks={'time':1}).precip for yr in yrrange], dim='time')
-        vort_in = xr.concat([xr.open_dataset(model_output_6hrly+'%04d0101.atmos_4xdaily.nc'%yr, chunks={'time':1}).vort850 for yr in yrrange], dim='time')
-        vref_in = xr.concat([xr.open_dataset(model_output_6hrly+'%04d0101.atmos_4xdaily.nc'%yr, chunks={'time':1}).v_ref for yr in yrrange], dim='time')
+        yrrange_filenames = [os.path.join(model_output_6hrly, filename) for filename in os.listdir(model_output_6hrly)
+                             if 'atmos_4xdaily' in filename
+                             and filename.endswith('.nc')
+                             and get_filename_year(filename) >= min(yrrange)
+                             and get_filename_year(filename) <= max(yrrange)]
+
+        if print_diagnostic: print(f'Tracker to begin processing data from files: {yrrange_filenames}.')
+        data_in = xr.concat([xr.open_dataset(filename) for filename in yrrange_filenames], dim='time')
+        rain_in = data_in['precip']
+        vort_in = data_in['vort850']
+        vref_in = data_in['v_ref']
 
         raw_tracks[str(yrrange)] = tracker(rain_in, vort_in, vref_in, rain_percentile, dist_threshold, size_threshold, latlim, interp50=interp50)
 
     raw_track_list = [raw_tracks[str(yrrange)] for yrrange in yrranges]
     ds, all_yrrange = track2netcdf(raw_track_list, yrranges)
+
+    # Data storage
     encoding = {k: {'dtype': 'float32', 'zlib': True, 'complevel': 1} for k in ds.variables}
-    ds.to_netcdf('seed_tracks.nc')
+
+    storage_filename = 'seed_tracks.nc'
+    storage_pathname = os.path.join(storage_dirname, storage_filename) if storage_dirname else storage_filename
+    ds.to_netcdf(storage_pathname)
 
 if __name__ == "__main__":
-    model_output_6hrly = sys.argv[1]
-    yr_beg = sys.argv[2]
-    yr_end = sys.argv[3]
 
-    run_50km(model_output_6hrly, yr_beg, yr_end)
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('dirname', type=str)
+    parser.add_argument('start_year', type=int)
+    parser.add_argument('end_year', type=int)
+
+    args = parser.parse_args()
+
+    run_50km(model_output_6hrly=args.dirname,
+             yr_beg=args.start_year,
+             yr_end=args.end_year)
