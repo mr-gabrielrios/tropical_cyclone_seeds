@@ -12,7 +12,7 @@ def tracker(rain, vort, vref, rain_percentile, dist_threshold, size_threshold, l
     if interp50:
         ds50 = xr.open_dataset('HiRAM_land_static.nc') # 50km model grid
         ds50 = ds50.rename({'grid_yt':'lat', 'grid_xt':'lon'})
-        
+
     lat_dim = rain.dims[1]
     lon_dim = rain.dims[2]
     rain = rain.rename({lat_dim:'lat', lon_dim:'lon'})
@@ -72,14 +72,14 @@ def tracker(rain, vort, vref, rain_percentile, dist_threshold, size_threshold, l
                 latprev = tracking[j][-1][1]
                 if (meanlon[i] - lonprev)**2 + (meanlat[i] - latprev)**2 < dist_threshold**2 or \
                    (360 - abs(meanlon[i] - lonprev))**2 + (meanlat[i] - latprev)**2 < dist_threshold**2: # if within dist_threshold
-                    tracking[j].append( (currtime, 
+                    tracking[j].append( (currtime,
                                          meanlat[i], meanlon[i], maxvort[i], sizes[i], maxvref[i], maxrain[i],
                                          currtime.year, currtime.month, currtime.day, currtime.hour) )
                     tmp.append( tracking.pop(j) ) # move the sublist to another list, so that a TC will not have two descendants in one snapshot (note: if a TC breaks into two, the second child will be considered a brand new TC)
                     hasancestor = True
                     break # because a current TC cannot have two ancestors (note: if two TCs merge, the second one will be considered dead)
             if hasancestor == False: # if the identified TC does not have an ancestor
-                tmp.append( [(currtime, 
+                tmp.append( [(currtime,
                               meanlat[i], meanlon[i], maxvort[i], sizes[i], maxvref[i], maxrain[i],
                               currtime.year, currtime.month, currtime.day, currtime.hour)] )
 
@@ -100,7 +100,7 @@ def tracker(rain, vort, vref, rain_percentile, dist_threshold, size_threshold, l
         return completed, vort, rain, rain_threshold, itrange
     else:
         return completed
-    
+
 def track2netcdf(raw_track_list, yrranges):
     ## concat lists for one run
     tracks_all_yrranges = itertools.chain(*raw_track_list)
@@ -125,7 +125,7 @@ def track2netcdf(raw_track_list, yrranges):
     variables = ['cftime', 'lat', 'lon', 'vort', 'size', 'vref', 'rain', 'year', 'month', 'day', 'hour']
     for ivar, variable in zip(range(len(variables)), variables):
         if variable == 'cftime' or variable == 'year': # don't save these variables to NetCDF
-            continue 
+            continue
 
         tmp = np.full((n_year, n_track, n_lifetime), np.nan)
         for iyr in range(len(all_yrrange)):
@@ -143,29 +143,29 @@ def run_50km(model_output_6hrly, yr_beg=111, yr_end=150):
     size_threshold = 3.1 # grid cells
     latlim = 30
     interp50 = False
-    
+
     yrranges = [range(yr, yr+5) for yr in range(yr_beg, yr_end, 5)] # process each 5-year chuck at a time
     print(yrranges)
-    
+
     raw_tracks = {}
 
     for yrrange in yrranges:
         print(yrrange)
-        
+
         rain_in = xr.concat([xr.open_dataset(model_output_6hrly+'%04d0101.atmos_4xdaily.nc'%yr, chunks={'time':1}).precip for yr in yrrange], dim='time')
         vort_in = xr.concat([xr.open_dataset(model_output_6hrly+'%04d0101.atmos_4xdaily.nc'%yr, chunks={'time':1}).vort850 for yr in yrrange], dim='time')
         vref_in = xr.concat([xr.open_dataset(model_output_6hrly+'%04d0101.atmos_4xdaily.nc'%yr, chunks={'time':1}).v_ref for yr in yrrange], dim='time')
 
         raw_tracks[str(yrrange)] = tracker(rain_in, vort_in, vref_in, rain_percentile, dist_threshold, size_threshold, latlim, interp50=interp50)
-        
+
     raw_track_list = [raw_tracks[str(yrrange)] for yrrange in yrranges]
     ds, all_yrrange = track2netcdf(raw_track_list, yrranges)
     encoding = {k: {'dtype': 'float32', 'zlib': True, 'complevel': 1} for k in ds.variables}
     ds.to_netcdf('seed_tracks.nc')
-    
+
 if __name__ == "__main__":
     model_output_6hrly = sys.argv[1]
     yr_beg = sys.argv[2]
     yr_end = sys.argv[3]
-    
+
     run_50km(model_output_6hrly, yr_beg, yr_end)
